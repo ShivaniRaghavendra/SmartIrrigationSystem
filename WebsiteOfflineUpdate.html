@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Irrigation System Dashboard</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
+        
+        body {
+            font-family: 'Poppins', sans-serif;
+            text-align: center;
+            background: linear-gradient(135deg, #8675c2, #c26bd3);
+            color: white;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+            width: 90%;
+            max-width: 500px;
+            color: #333;
+            transition: transform 0.3s ease-in-out;
+        }
+        .container:hover {
+            transform: scale(1.02);
+        }
+        h1 {
+            font-size: 2em;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .data {
+            font-size: 1.4em;
+            margin: 15px 0;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: #f7f7f7;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        .value {
+            padding: 5px 15px;
+            border-radius: 8px;
+            font-weight: bold;
+            background: #e0f2f1;
+            color: #00796B;
+        }
+        .status {
+            font-size: 1.2em;
+            padding: 8px;
+            border-radius: 10px;
+            color: white;
+            font-weight: bold;
+        }
+        .on { background: #4CAF50; }
+        .off { background: #D32F2F; }
+        .rain-yes { color: #1565C0; }
+        .rain-no { color: #9E9E9E; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌱 Irrigation System Dashboard</h1>
+        <p class="data">System Status: <span id="system-status" class="status off">Checking...</span></p>
+        <p class="data">Last Update: <span id="last-update" class="value">Loading...</span></p>
+        <p class="data">Soil Moisture: <span id="moisture" class="value">Loading...</span></p>
+        <p class="data">Temperature: <span id="temperature" class="value">Loading...</span>°C</p>
+        <p class="data">Humidity: <span id="humidity" class="value">Loading...</span>%</p>
+        <p class="data">Rain: <span id="rain" class="value rain-no">Loading...</span></p>
+        <p class="data">Pump Status: <span id="pump" class="status off">Loading...</span></p>
+    </div>
+    
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script>
+        const THINGSPEAK_API_URL = "https://api.thingspeak.com/channels/2855155/feeds.json?results=1";
+        const THINGSPEAK_API_KEY = "UEFBE2B2QFY7K9H9"; // Replace with your Read API Key
+        const MQTT_BROKER = "ws://192.168.13.68:9001"; // WebSocket Port
+        
+        // Initialize values from localStorage if available, otherwise use placeholder text
+        let lastKnownValues = {
+            lastUpdate: localStorage.getItem('lastUpdate') || "Awaiting first update...",
+            moisture: localStorage.getItem('moisture') || "...",
+            temperature: localStorage.getItem('temperature') || "...",
+            humidity: localStorage.getItem('humidity') || "...",
+            rain: localStorage.getItem('rain') || "No",
+            pump: localStorage.getItem('pump') || "OFF"
+        };
+
+        // Initial UI update with stored values
+        updateUI(true);
+        
+        // Connect to MQTT Broker
+        const client = mqtt.connect(MQTT_BROKER);
+
+        function fetchThingSpeakData() {
+            fetch(`${THINGSPEAK_API_URL}&api_key=${THINGSPEAK_API_KEY}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.feeds && data.feeds.length > 0) {
+                        const latest = data.feeds[0];
+                        const lastUpdated = new Date(latest.created_at);
+                        const currentTime = new Date();
+                        const timeDiff = (currentTime - lastUpdated) / 1000; // Difference in seconds
+
+                        // Update values only if they exist in the response
+                        if (latest.created_at) {
+                            lastKnownValues.lastUpdate = lastUpdated.toLocaleString();
+                            localStorage.setItem('lastUpdate', lastKnownValues.lastUpdate);
+                        }
+                        
+                        if (latest.field1) {
+                            lastKnownValues.moisture = latest.field1;
+                            localStorage.setItem('moisture', lastKnownValues.moisture);
+                        }
+                        
+                        if (latest.field2) {
+                            lastKnownValues.temperature = latest.field2;
+                            localStorage.setItem('temperature', lastKnownValues.temperature);
+                        }
+                        
+                        if (latest.field3) {
+                            lastKnownValues.humidity = latest.field3;
+                            localStorage.setItem('humidity', lastKnownValues.humidity);
+                        }
+                        
+                        if (latest.field4 !== undefined) {
+                            lastKnownValues.rain = latest.field4 === "1" ? "Yes" : "No";
+                            localStorage.setItem('rain', lastKnownValues.rain);
+                        }
+
+                        // Check if ESP32 is Online
+                        const systemStatusElement = document.getElementById("system-status");
+                        const isOnline = timeDiff <= 60;
+                        systemStatusElement.innerText = isOnline ? "Online" : "Offline";
+                        systemStatusElement.className = isOnline ? "status on" : "status off";
+
+                        // Update UI with new values (except pump which is handled by MQTT)
+                        updateUI(false);
+                    }
+                })
+                .catch(error => {
+                    console.error("Error fetching ThingSpeak data:", error);
+                    document.getElementById("system-status").innerText = "Error!";
+                    document.getElementById("system-status").className = "status off";
+                    
+                    // Still update UI with last known values
+                    updateUI(false);
+                });
+        }
+
+        function updateUI(updatePump = true) {
+            document.getElementById("last-update").innerText = lastKnownValues.lastUpdate;
+            document.getElementById("moisture").innerText = lastKnownValues.moisture;
+            document.getElementById("temperature").innerText = lastKnownValues.temperature;
+            document.getElementById("humidity").innerText = lastKnownValues.humidity;
+            document.getElementById("rain").innerText = lastKnownValues.rain;
+            document.getElementById("rain").className = lastKnownValues.rain === "Yes" ? "value rain-yes" : "value rain-no";
+            
+            // Only update pump if specified
+            if (updatePump) {
+                document.getElementById("pump").innerText = lastKnownValues.pump;
+                document.getElementById("pump").className = lastKnownValues.pump === "ON" ? "status on" : "status off";
+            }
+        }
+
+        // MQTT Connection for Pump Status
+        client.on("connect", function () {
+            console.log("Connected to MQTT Broker");
+            client.subscribe("irrigation/pumpControl");
+        });
+
+        client.on("message", function (topic, message) {
+            if (topic === "irrigation/pumpControl") {
+                const pumpStatus = message.toString();
+                if (pumpStatus === "ON" || pumpStatus === "OFF") {
+                    lastKnownValues.pump = pumpStatus;
+                    localStorage.setItem('pump', pumpStatus);
+                    updateUI(true); // Update pump status
+                }
+            }
+        });
+
+        // Handle MQTT errors
+        client.on("error", function (error) {
+            console.error("MQTT Error:", error);
+            // Keep using last known values
+        });
+
+        client.on("offline", function () {
+            console.log("MQTT Disconnected - Will retry");
+            // Keep using last known values
+        });
+
+        // Call API and Update UI every 5 seconds
+        fetchThingSpeakData();
+        setInterval(fetchThingSpeakData, 5000);
+    </script>
+</body>
+</html>
